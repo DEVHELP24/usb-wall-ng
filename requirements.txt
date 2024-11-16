@@ -1,0 +1,3 @@
+pyudev>=0.23.0
+PyGObject>=3.40.1
+Notify>=0.7.0
