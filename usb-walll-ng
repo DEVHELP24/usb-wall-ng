@@ -1,0 +1,111 @@
+import gi
+import datetime
+import os
+from collections import deque
+from pyudev import Context, Monitor, MonitorObserver
+import logging
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Notify", "0.7")
+from gi.repository import Gtk, Notify, GdkPixbuf
+
+# Configure logging
+log_file = os.path.expanduser("~/.usb_notifier.log")
+logging.basicConfig(filename=log_file, level=logging.INFO, format="%(asctime)s - %(message)s")
+
+class USBNotifier:
+    def __init__(self):
+        Notify.init("USB Notifier")
+        
+        # Create a tray icon with a context menu
+        self.status_icon = Gtk.StatusIcon()
+        self.status_icon.set_from_icon_name("drive-removable-media")
+        self.status_icon.set_tooltip_text("USB Notifier Running")
+        self.status_icon.set_visible(True)
+        self.create_tray_menu()
+
+        # Track recent events
+        self.event_log = deque(maxlen=10)
+
+        # Monitor udev events
+        self.context = Context()
+        self.monitor = Monitor.from_netlink(self.context)
+        self.monitor.filter_by(subsystem='usb')
+        self.observer = MonitorObserver(self.monitor, callback=self.device_event)
+        self.observer.start()
+
+    def device_event(self, action, device):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        device_name = device.get("ID_MODEL", "Unknown USB Device")
+        device_type = device.get("DEVTYPE", "Unknown Type")
+        
+        # Log the event
+        event_description = f"[{timestamp}] {action.capitalize()}: {device_name} ({device_type})"
+        self.event_log.append(event_description)
+        logging.info(event_description)
+
+        # Show notification for the event
+        if action == "add":
+            self.show_notification(
+                title="USB Device Connected",
+                message=f"Name: {device_name}\nTime: {timestamp}\nType: {device_type}",
+                icon="dialog-information"
+            )
+        elif action == "remove":
+            self.show_notification(
+                title="USB Device Removed",
+                message=f"Name: {device_name}\nTime: {timestamp}",
+                icon="dialog-warning"
+            )
+
+    def show_notification(self, title, message, icon):
+        notification = Notify.Notification.new(title, message, icon)
+        notification.show()
+
+    def create_tray_menu(self):
+        self.menu = Gtk.Menu()
+
+        show_events_item = Gtk.MenuItem(label="Show Recent Events")
+        show_events_item.connect("activate", self.show_recent_events)
+        self.menu.append(show_events_item)
+
+        quit_item = Gtk.MenuItem(label="Quit")
+        quit_item.connect("activate", Gtk.main_quit)
+        self.menu.append(quit_item)
+
+        self.menu.show_all()
+        self.status_icon.connect("popup-menu", self.on_tray_menu)
+
+    def on_tray_menu(self, icon, button, time):
+        self.menu.popup(None, None, None, None, button, time)
+
+    def show_recent_events(self, widget):
+        # Create a scrollable dialog for recent events
+        dialog = Gtk.Dialog(
+            "Recent USB Events",
+            None,
+            Gtk.DialogFlags.MODAL | Gtk.DialogFlags.DESTROY_WITH_PARENT,
+            (Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        )
+        dialog.set_default_size(400, 300)
+
+        scrolled_window = Gtk.ScrolledWindow()
+        scrolled_window.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+
+        events_text = "\n".join(self.event_log) if self.event_log else "No recent events."
+        label = Gtk.Label(label=events_text)
+        label.set_xalign(0)
+        scrolled_window.add(label)
+
+        content_area = dialog.get_content_area()
+        content_area.pack_start(scrolled_window, True, True, 0)
+        scrolled_window.show_all()
+        dialog.run()
+        dialog.destroy()
+
+    def run(self):
+        Gtk.main()
+
+if __name__ == "__main__":
+    app = USBNotifier()
+    app.run()
